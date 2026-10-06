@@ -12,7 +12,7 @@ Running working doc: `docs/working-doc.html` (update it as work progresses; add 
 ## Key files
 | File | Purpose |
 |---|---|
-| `bot.py` | Entry point: `/tenman start|schedule|list|lobby|cancel`, persistent buttons (DynamicItem `tenman:<action>:<session_id>`), `tick()` = series → scheduled posts → close started → daily backup → alerts (60 s), heartbeat (30 s) |
+| `bot.py` | Entry point: `/tenman start|schedule|list|lobby|cancel|edit|update`, persistent buttons (DynamicItem `tenman:<action>:<session_id>`), `tick()` = series → scheduled posts → close started → daily backup → alerts (60 s), heartbeat (30 s) |
 | `devtool.py` | Webhook-only testing: `ping`, `demo --when "fri 9pm" --players 6`, `alerts`, `list` (uses `data/dev.db`) |
 | `utils/db_queue.py` | `DBQueue`: one writer thread, one transaction per job, `run()` (async) / `call()` (sync) / `read()` (read-only conn) |
 | `utils/database.py` | Schema, migrations, all queries. Write functions take `conn` first and are submitted to the queue |
@@ -38,6 +38,7 @@ Running working doc: `docs/working-doc.html` (update it as work progresses; add 
 - Full documentation: `docs/README.md` (aspect docs 01-21, components in 22); update the relevant doc with any behaviour change
 
 - Session lifecycle: `status` open→cancelled|done; `post_state` scheduled→posting→posted. Only open+posted sessions take clicks/alerts
+- Edits (`db.edit_session` / `db.update_series`): one queue job, all checks before the first write. A time change clears only start-tied alert rows (gameday/starting) whose new moment is still ahead; never daily rows or a `sending` row, so no alert is sent twice
 - Schema changes: append to `MIGRATIONS` in `utils/database.py` as an idempotent callable; never rebuild `sessions` (ON DELETE CASCADE wipes signups)
 - Interaction paths use `INTERACTION_DB_TIMEOUT` (2 s) and must always answer (use `answer()`)
 - No emoji in message text; emoji only on the sign-up buttons

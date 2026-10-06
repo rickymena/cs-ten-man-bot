@@ -195,6 +195,10 @@ class LimitReached(RuntimeError):
     """Too many sign-ups. str(exc) is safe to show the user."""
 
 
+class EditRefused(RuntimeError):
+    """An edit or series update that can't be applied. str(exc) is safe to show the user."""
+
+
 def ensure_schema(conn: sqlite3.Connection) -> int:
     """Create or migrate the schema. Runs as a queue job, inside its transaction."""
     for statement in _split(MIGRATIONS_DDL + DDL):
@@ -471,6 +475,230 @@ def materialize_series(conn, now: datetime, tz) -> list[int]:
             conn.execute("UPDATE series SET remaining = remaining - 1 WHERE id = ?", (series["id"],))
         created.append(sid)
     return created
+
+
+# --------------------------------------------------------------------------- editing
+
+# Alert rows tied to the start time (utils/alerts.py GAMEDAY / STARTING). Daily
+# rows are keyed by calendar date and "full" by the roster, not the start time.
+_START_TIED_ALERTS = ("gameday", "starting")
+POSTED_EDIT_MAX_DAYS = 30  # same horizon as /tenman start
+
+
+def default_title(start: datetime) -> str:
+    return f"{start:%A} 10-man"
+
+
+def _scheduled_post_days(session: dict, series: dict | None, tz, default: int) -> int:
+    """
+    How many days ahead a scheduled game posts, when the edit doesn't say.
+    One-off games don't store post_days: it is read back from post_at when
+    post_at still sits at the game's wall-clock time (the /tenman schedule
+    rule); a post_at that was pulled forward to "now" falls back to default.
+    """
+    if series is not None:
+        return int(series["post_days"])
+    if session.get("post_at"):
+        start = datetime.fromtimestamp(session["start_at"], tz)
+        post = datetime.fromtimestamp(session["post_at"], tz)
+        if post.timetz().replace(tzinfo=None) == start.timetz().replace(tzinfo=None):
+            return max(0, min((start.date() - post.date()).days, 14))
+    return default
+
+
+def edit_session(conn, session_id: int, *, tz, now=None, start_at: int | None = None, title: str | None = None,
+                 slots: int | None = None, post_days: int | None = None, lobby_url: str | None = None,
+                 default_post_days: int = 3, weekly_max_post_days: int = 6, gameday_hours: int = 2,
+                 posted_max_days: int = POSTED_EDIT_MAX_DAYS) -> dict:
+    """
+    /tenman edit in ONE job: re-check the game is still open, apply only the
+    given fields, and for a posted game return the before/after signups so the
+    caller can name who moved onto or off the waitlist. Every check runs
+    before the first write, so a refusal changes nothing.
+
+    Scheduled game: post_at is recomputed from the new time / post_days with
+    the /tenman schedule rule. Posted game: post_days is ignored; when the
+    time moves, start-tied alert rows (gameday, starting) whose new moment is
+    still ahead are cleared so they follow the new time. A row whose new
+    moment has already passed is kept, so an alert already sent is never sent
+    again; daily rows are never cleared (one daily per calendar day). When
+    slots change and the roster is no longer full, the "full" row is cleared
+    so it fires again when the bigger roster fills.
+
+    Returns {"session", "before_session", "posted", "changes", "before",
+    "after", "demoted", "promoted", "alerts_reset", "notes"}. "changes" maps
+    field -> (old, new) for fields that actually changed.
+    """
+    from utils.roster import build_roster, promoted as promoted_rows  # roster imports this module
+
+    now = int(now if now is not None else time.time())
+    session = get_session(conn, session_id)
+    if session["status"] != OPEN:
+        raise EditRefused(f"that game is {session['status']}")
+    if now >= session["start_at"]:
+        raise EditRefused("that game has already started")
+    if session["post_state"] == POSTING:
+        raise EditRefused("its sign-up is being posted right now; try again in a minute")
+    posted = session["post_state"] == POSTED
+    if slots is not None and not 2 <= int(slots) <= 40:
+        raise ValueError("slots must be 2-40")
+    if post_days is not None and not 0 <= int(post_days) <= 14:
+        raise ValueError("post_days must be 0-14")
+    if title is not None and (not isinstance(title, str) or not 1 <= len(title) <= 80):
+        raise ValueError("title must be 1-80 characters")
+    if start_at is not None:
+        start_at = int(start_at)
+        if start_at <= now:
+            raise EditRefused("the new time has already passed")
+        if posted and start_at - now > posted_max_days * 86400:
+            raise EditRefused(f"a posted game can be moved at most {posted_max_days} days ahead")
+
+    series = get_series(conn, session["series_id"]) if session.get("series_id") else None
+    notes = []
+    new = {"title": session["title"], "start_at": session["start_at"], "slots": session["slots"],
+           "lobby_url": session["lobby_url"], "post_at": session["post_at"]}
+    old_start = datetime.fromtimestamp(session["start_at"], tz)
+    if start_at is not None:
+        new["start_at"] = start_at
+        if title is None and session["title"] == default_title(old_start):
+            # The default '<Weekday> 10-man' follows the new day.
+            new["title"] = default_title(datetime.fromtimestamp(start_at, tz))
+    if title is not None:
+        new["title"] = title
+    if slots is not None:
+        new["slots"] = int(slots)
+    if lobby_url is not None:
+        new["lobby_url"] = lobby_url
+    if posted:
+        if post_days is not None:
+            notes.append("post_days ignored: the sign-up is already up")
+    elif start_at is not None or post_days is not None:
+        days = int(post_days) if post_days is not None else _scheduled_post_days(session, series, tz,
+                                                                                   default_post_days)
+        if series is not None and days > weekly_max_post_days:
+            days = weekly_max_post_days
+            notes.append(f"weekly sign-ups post at most {weekly_max_post_days} days ahead, so post_days was "
+                         "set to that")
+        start = datetime.fromtimestamp(new["start_at"], tz)
+        new["post_at"] = max(int(post_time(start, days).timestamp()), now + 1)
+        if new["post_at"] <= now + 60:
+            notes.append("the sign-up posts within a minute")
+
+    changes = {k: (session[k], v) for k, v in new.items() if session[k] != v}
+    before = list_signups(conn, session_id)
+    result = {"before_session": session, "posted": posted, "changes": changes, "before": before,
+              "after": before, "demoted": [], "promoted": [], "alerts_reset": [], "notes": notes}
+    if changes:
+        conn.execute(
+            "UPDATE sessions SET title = ?, start_at = ?, slots = ?, lobby_url = ?, post_at = ? "
+            "WHERE id = ? AND status = 'open'",
+            (new["title"], new["start_at"], new["slots"], new["lobby_url"], new["post_at"], session_id))
+    if posted and changes:
+        old_roster = build_roster(before, session["slots"])
+        new_roster = build_roster(before, new["slots"])
+        confirmed_now = {r["id"] for r in new_roster.confirmed}
+        result["demoted"] = [r for r in old_roster.confirmed if r["id"] not in confirmed_now]
+        result["promoted"] = promoted_rows(old_roster, new_roster)
+        result["alerts_reset"] = _reset_alerts(conn, session_id, changes, new_roster.full, now, gameday_hours)
+    result["session"] = get_session(conn, session_id)
+    return result
+
+
+def _reset_alerts(conn, session_id: int, changes: dict, full: bool, now: int, gameday_hours: int) -> list:
+    """Clear the alert rows an edit made stale; never one in flight ('sending')."""
+    moments = {}
+    if "start_at" in changes:
+        new_start = changes["start_at"][1]
+        moments = {"gameday": new_start - gameday_hours * 3600, "starting": new_start}
+    reset = []
+    for row in conn.execute("SELECT kind, slot_key, status FROM alerts WHERE session_id = ?", (session_id,)):
+        if row["status"] == ALERT_SENDING:
+            continue
+        stale = (row["kind"] in _START_TIED_ALERTS and row["kind"] in moments and moments[row["kind"]] > now) \
+            or (row["kind"] == "full" and "slots" in changes and not full)
+        if stale:
+            reset.append((row["kind"], row["slot_key"]))
+    for kind, slot_key in reset:
+        conn.execute("DELETE FROM alerts WHERE session_id = ? AND kind = ? AND slot_key = ?",
+                     (session_id, kind, slot_key))
+    return reset
+
+
+def next_series_session(conn, series_id: int, now=None) -> dict | None:
+    """The series' upcoming open game (the one materialize_series keeps ahead), if any."""
+    now = int(now if now is not None else time.time())
+    row = conn.execute("SELECT * FROM sessions WHERE series_id = ? AND status = 'open' AND start_at > ? "
+                       "ORDER BY start_at, id LIMIT 1", (series_id, now)).fetchone()
+    return dict(row) if row else None
+
+
+def update_series(conn, series_id: int, *, tz, now=None, weekday: int | None = None, local_time: str | None = None,
+                  title: str | None = None, slots: int | None = None, post_days: int | None = None,
+                  lobby_url: str | None = None, apply_to_next: bool = False, weekly_max_post_days: int = 6,
+                  gameday_hours: int = 2) -> dict:
+    """
+    /tenman update in ONE job: change a weekly series' defaults for the games
+    it creates from now on. With apply_to_next, the upcoming game gets the
+    same change through edit_session (moved to the new weekday/time on or
+    after its current day); if that game can't be edited, the series change
+    still applies and "next_error" says why.
+
+    Returns {"series", "before", "changes", "capped", "upcoming", "next",
+    "next_error"}: "upcoming" is the series' next open game as it was before
+    any edit, "next" edit_session's result (or None), "next_error" a
+    user-safe reason the upcoming game was left as it was.
+    """
+    now = int(now if now is not None else time.time())
+    series = get_series(conn, series_id)
+    if series is None:
+        raise EditRefused("that series doesn't exist")
+    if not series["active"]:
+        raise EditRefused("that series has stopped")
+    if slots is not None and not 2 <= int(slots) <= 40:
+        raise ValueError("slots must be 2-40")
+    if post_days is not None and not 0 <= int(post_days) <= 14:
+        raise ValueError("post_days must be 0-14")
+    if weekday is not None and not 0 <= int(weekday) <= 6:
+        raise ValueError("weekday must be 0-6")
+    if local_time is not None:
+        hours, minutes = local_time.split(":")
+        if not (0 <= int(hours) <= 23 and 0 <= int(minutes) <= 59):
+            raise ValueError("time must be HH:MM")
+        local_time = f"{int(hours):02d}:{int(minutes):02d}"
+    capped = post_days is not None and int(post_days) > weekly_max_post_days
+    new = {"weekday": series["weekday"] if weekday is None else int(weekday),
+           "local_time": local_time or series["local_time"],
+           "title": series["title"] if title is None else title,
+           "slots": series["slots"] if slots is None else int(slots),
+           "post_days": series["post_days"] if post_days is None else min(int(post_days), weekly_max_post_days),
+           "lobby_url": series["lobby_url"] if lobby_url is None else lobby_url}
+    changes = {k: (series[k], v) for k, v in new.items() if series[k] != v}
+    if changes:
+        conn.execute("UPDATE series SET weekday = ?, local_time = ?, title = ?, slots = ?, post_days = ?, "
+                     "lobby_url = ? WHERE id = ?",
+                     (new["weekday"], new["local_time"], new["title"], new["slots"], new["post_days"],
+                      new["lobby_url"], series_id))
+    upcoming = next_series_session(conn, series_id, now)
+    result = {"series": get_series(conn, series_id), "before": series, "changes": changes, "capped": capped,
+              "upcoming": upcoming, "next": None, "next_error": None}
+    if not apply_to_next:
+        return result
+    if upcoming is None:
+        result["next_error"] = "there is no upcoming game yet"
+        return result
+    start_at = None
+    if "weekday" in changes or "local_time" in changes:
+        current = datetime.fromtimestamp(upcoming["start_at"], tz)
+        day = current.date() + timedelta(days=(new["weekday"] - current.weekday()) % 7)
+        start_at = int(occurrence(day, new["local_time"], tz).timestamp())
+    try:
+        result["next"] = edit_session(
+            conn, upcoming["id"], tz=tz, now=now, start_at=start_at, title=title,
+            slots=slots, post_days=post_days, lobby_url=lobby_url,
+            weekly_max_post_days=weekly_max_post_days, gameday_hours=gameday_hours)
+    except EditRefused as exc:
+        result["next_error"] = str(exc)
+    return result
 
 
 # --------------------------------------------------------------------------- signups

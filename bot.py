@@ -7,6 +7,8 @@
     /tenman list                         everything coming up in this channel, numbered
     /tenman lobby url:<link>             share the lobby link with the confirmed players
     /tenman cancel [number:N]            cancel one (or stop a weekly series)
+    /tenman edit [number:N] when:/title:/slots:/post_days:/lobby:   change one game
+    /tenman update [series:S<id>] ... [apply_to_next:true]          change a weekly series' future weeks
 
 Every database write goes through utils/db_queue.py (single writer). Buttons
 are DynamicItems keyed by session id, so they keep working after a restart.
@@ -37,11 +39,13 @@ from utils import backup  # noqa: E402
 from utils import database as db  # noqa: E402
 from utils.config import ConfigError, load_config  # noqa: E402
 from utils.db_queue import DBQueue, QueueBusy  # noqa: E402
-from utils.embeds import BUTTONS, choice_label, numbered_lines, series_lines, signup_embed  # noqa: E402
+from utils.embeds import (  # noqa: E402
+    BUTTONS, WEEKDAYS, choice_label, numbered_lines, series_lines, signup_embed,
+)
 from utils.exit_codes import EXIT_CONFIG, EXIT_OK  # noqa: E402
 from utils.roster import build_roster, promoted  # noqa: E402
 from utils.sanitize import (  # noqa: E402
-    InputError, clean_display_name, clean_lobby_url, clean_search, clean_title, clean_when, md,
+    InputError, clean_display_name, clean_lobby_url, clean_search, clean_text, clean_title, clean_when, md,
 )
 from utils.scheduler_state import write_heartbeat  # noqa: E402
 from utils.tracking import setup_logging  # noqa: E402
@@ -118,6 +122,61 @@ def zone_clock(when: datetime) -> str:
 def is_organizer_or_mod(interaction: discord.Interaction, created_by: str) -> bool:
     perms = interaction.channel.permissions_for(interaction.user)
     return str(interaction.user.id) == str(created_by) or perms.manage_messages
+
+
+def change_phrases(changes: dict) -> list[str]:
+    """What an edit changed, in words. User text goes through md()."""
+    out = []
+    if "start_at" in changes:
+        new = changes["start_at"][1]
+        out.append(f"moved to <t:{new}:F> (<t:{new}:R>)")
+    if "title" in changes:
+        out.append(f"renamed from **{md(changes['title'][0])}**")
+    if "slots" in changes:
+        old, new = changes["slots"]
+        out.append(f"now {new} slots (was {old})")
+    if "lobby_url" in changes:
+        out.append("lobby link updated")
+    if "post_at" in changes:
+        out.append(f"sign-up posts <t:{changes['post_at'][1]}:R>")
+    return out
+
+
+def edit_note(result: dict, editor: str) -> tuple[str, list[str]]:
+    """
+    The public note for an edit of a posted game, and the users it may ping:
+    only players the edit moved onto or off the waitlist. Never the role.
+    """
+    session = result["session"]
+    title = md(session["title"])
+    text = f"**{title}** was updated by {editor}: " + "; ".join(change_phrases(result["changes"])) + "."
+    demoted = sorted({r["user_id"] for r in result["demoted"]})
+    moved_up = sorted({r["user_id"] for r in result["promoted"]})
+    if demoted:
+        text += "\n" + " ".join(f"<@{i}>" for i in demoted) + " you're now on the waitlist."
+    if moved_up:
+        text += "\n" + " ".join(f"<@{i}>" for i in moved_up) + f" you're off the waitlist for **{title}**."
+    return text, demoted + moved_up
+
+
+def user_mentions(user_ids: list[str]) -> discord.AllowedMentions:
+    if not user_ids:
+        return discord.AllowedMentions.none()
+    return discord.AllowedMentions(users=[discord.Object(int(i)) for i in user_ids], roles=False, everyone=False)
+
+
+def series_token(value: str | None) -> int | None:
+    """'S3', '[S3]', 's3' or '3' -> 3; anything else -> None."""
+    text = clean_search(value or "").strip().strip("[]").strip().upper().removeprefix("S")
+    return int(text) if text.isdigit() and len(text) <= 12 else None
+
+
+def series_choice_label(series: dict) -> str:
+    """Autocomplete entry for a series (plain text, max 100 chars)."""
+    name = clean_text(series["title"], 50) if series["title"] else "10-man"
+    hours, minutes = (int(x) for x in series["local_time"].split(":"))
+    clock = f"{hours % 12 or 12}:{minutes:02d} {'PM' if hours >= 12 else 'AM'}"
+    return f"S{series['id']} · {name} · every {WEEKDAYS[series['weekday']]} {clock}"[:100]
 
 
 # --------------------------------------------------------------------------- buttons
@@ -666,7 +725,8 @@ class TenManCommands(app_commands.Group):
             parts.append(f"**Upcoming**\n{numbered_lines(rows)}")
         if series:
             parts.append(f"**Weekly series**\n{series_lines(series, self.bot.cfg.tz)}")
-        parts.append("Use the number with `/tenman cancel number:N` or `/tenman lobby number:N`.")
+        parts.append("Use the number with `/tenman cancel`, `/tenman lobby` or `/tenman edit` (`number:N`)"
+                     + (", and a series with `/tenman update series:S<id>`." if series else "."))
         text = "\n\n".join(parts)
         if len(text) > 2000:  # cut on a line boundary so no markdown is left half-open
             lines, kept = text.splitlines(), []
@@ -737,6 +797,177 @@ class TenManCommands(app_commands.Group):
     @cancel.autocomplete("number")
     async def _cancel_number(self, interaction, current: str):
         return await self._choices(interaction, current, upcoming=True)
+
+    # ----------------------------------------------------------------- edit / update
+
+    async def _announce_edit(self, interaction: discord.Interaction, result: dict, *, as_response: bool) -> None:
+        """Public note for an edited posted game (pings only players it moved), then redraw its sign-up."""
+        text, ping = edit_note(result, interaction.user.mention)
+        if as_response:
+            await interaction.response.send_message(text, allowed_mentions=user_mentions(ping))
+        else:
+            await interaction.followup.send(text, allowed_mentions=user_mentions(ping))
+        await self.bot.refresh(result["session"]["id"])
+
+    @app_commands.command(name="edit", description="Change one game: time, title, slots, post days or lobby")
+    @app_commands.describe(number="Which game, from /tenman list (needed when there are several)",
+                           when="New start, e.g. sat 9pm; Eastern unless you add ct/mt/pt",
+                           title="New title",
+                           slots="Players needed (2-40); the roster is kept, extra players go to the waitlist",
+                           post_days="Scheduled games only: days before the game to post the sign-up",
+                           lobby="New lobby link (https://...)")
+    async def edit(self, interaction: discord.Interaction, number: int | None = None, when: str | None = None,
+                   title: str | None = None, slots: app_commands.Range[int, 2, 40] | None = None,
+                   post_days: app_commands.Range[int, 0, 14] | None = None, lobby: str | None = None):
+        cfg = self.bot.cfg
+        if when is None and title is None and slots is None and post_days is None and lobby is None:
+            return await answer(interaction, "Give at least one thing to change: when, title, slots, post_days "
+                                             "or lobby.")
+        try:
+            # The wider schedule horizon here; a posted game is held to 30 days inside the job.
+            start_at = parse_when(clean_when(when), datetime.now(cfg.tz), cfg.tz,
+                                  max_days=SCHEDULE_MAX_DAYS) if when is not None else None
+            title = clean_title(title) if title is not None else None
+            lobby = clean_lobby_url(lobby, cfg.lobby_allowed_hosts) if lobby is not None else None
+        except (InputError, WhenError) as exc:
+            return await answer(interaction, f"Couldn't use that: {exc}.")
+        if slots is not None and not 2 <= int(slots) <= 40:
+            return await answer(interaction, "Couldn't use that: slots must be 2-40.")
+        if post_days is not None and not 0 <= int(post_days) <= 14:
+            return await answer(interaction, "Couldn't use that: post_days must be 0-14.")
+        picked = await self._pick(interaction, number, "edit", upcoming=True)
+        if picked is None:
+            return
+        session, _ = picked
+        if not is_organizer_or_mod(interaction, session["created_by"]):
+            return await answer(interaction, "Only the organizer or a moderator can edit a game.")
+        try:
+            # One job: re-check it is still open, change it, and take the
+            # before/after rosters, so a click can't land in between.
+            result = await self.bot.q.run(
+                db.edit_session, session["id"], tz=cfg.tz,
+                start_at=int(start_at.timestamp()) if start_at is not None else None,
+                title=title, slots=slots, post_days=post_days, lobby_url=lobby,
+                default_post_days=cfg.schedule_post_days, weekly_max_post_days=WEEKLY_MAX_POST_DAYS,
+                gameday_hours=cfg.gameday_alert_hours, timeout=INTERACTION_DB_TIMEOUT)
+        except QueueBusy:
+            return await answer(interaction, BUSY_REPLY)
+        except db.SessionNotFound:
+            return await answer(interaction, "That game no longer exists.")
+        except (db.EditRefused, ValueError) as exc:
+            return await answer(interaction, f"Can't edit that: {exc}.")
+        notes = "".join(f"\nNote: {n}." for n in result["notes"])
+        name = md(result["session"]["title"])
+        if not result["changes"]:
+            return await answer(interaction, f"Nothing changed for **{name}**." + notes)
+        logger.info(f"session {session['id']} edited by {interaction.user.id}: {sorted(result['changes'])}")
+        if not result["posted"]:
+            return await answer(interaction, f"Updated **{name}** (scheduled, not posted yet): "
+                                + "; ".join(change_phrases(result["changes"])) + "." + notes)
+        await self._announce_edit(interaction, result, as_response=True)
+        if notes:
+            await interaction.followup.send(notes.strip(), ephemeral=True)
+
+    @edit.autocomplete("number")
+    async def _edit_number(self, interaction, current: str):
+        return await self._choices(interaction, current, upcoming=True)
+
+    @edit.autocomplete("when")
+    async def _edit_when(self, interaction, current: str):
+        return await self._when_choices(interaction, current, SCHEDULE_MAX_DAYS)
+
+    @app_commands.command(name="update", description="Change a weekly series for future weeks")
+    @app_commands.describe(series="Which series, e.g. S3 from /tenman list (needed when there are several)",
+                           when="New day and time, e.g. sat 9pm; Eastern unless you add ct/mt/pt",
+                           title="New title for future weeks",
+                           slots="Players needed (2-40)",
+                           post_days="Days before each game to post its sign-up (at most 6)",
+                           lobby="New lobby link for every week (https://...)",
+                           apply_to_next="Also change the upcoming game if it hasn't started")
+    async def update(self, interaction: discord.Interaction, series: str | None = None, when: str | None = None,
+                     title: str | None = None, slots: app_commands.Range[int, 2, 40] | None = None,
+                     post_days: app_commands.Range[int, 0, 14] | None = None, lobby: str | None = None,
+                     apply_to_next: bool = False):
+        cfg = self.bot.cfg
+        if when is None and title is None and slots is None and post_days is None and lobby is None:
+            return await answer(interaction, "Give at least one thing to change: when, title, slots, post_days "
+                                             "or lobby.")
+        try:
+            start = parse_when(clean_when(when), datetime.now(cfg.tz), cfg.tz,
+                               max_days=SCHEDULE_MAX_DAYS) if when is not None else None
+            title = clean_title(title) if title is not None else None
+            lobby = clean_lobby_url(lobby, cfg.lobby_allowed_hosts) if lobby is not None else None
+        except (InputError, WhenError) as exc:
+            return await answer(interaction, f"Couldn't use that: {exc}.")
+        if slots is not None and not 2 <= int(slots) <= 40:
+            return await answer(interaction, "Couldn't use that: slots must be 2-40.")
+        if post_days is not None and not 0 <= int(post_days) <= 14:
+            return await answer(interaction, "Couldn't use that: post_days must be 0-14.")
+        rows = await self.bot.q.aread(db.channel_series, interaction.channel_id)
+        if not rows:
+            return await answer(interaction, "No weekly series in this channel.")
+        wanted = series_token(series)
+        if series is None and len(rows) == 1:
+            picked = rows[0]
+        else:
+            picked = next((s for s in rows if s["id"] == wanted), None)
+            if picked is None:
+                head = "Pick one:" if series is None else "There is no such series in this channel."
+                return await answer(interaction, f"{head}\n{series_lines(rows, cfg.tz)}\n\n"
+                                                 "Run `/tenman update series:S<id>`.")
+        if not is_organizer_or_mod(interaction, picked["created_by"]):
+            return await answer(interaction, "Only the series organizer or a moderator can update it.")
+        try:
+            result = await self.bot.q.run(
+                db.update_series, picked["id"], tz=cfg.tz,
+                weekday=start.weekday() if start is not None else None,
+                local_time=f"{start:%H:%M}" if start is not None else None,
+                title=title, slots=slots, post_days=post_days, lobby_url=lobby, apply_to_next=apply_to_next,
+                weekly_max_post_days=WEEKLY_MAX_POST_DAYS, gameday_hours=cfg.gameday_alert_hours,
+                timeout=INTERACTION_DB_TIMEOUT)
+        except QueueBusy:
+            return await answer(interaction, BUSY_REPLY)
+        except (db.EditRefused, ValueError) as exc:
+            return await answer(interaction, f"Can't update that: {exc}.")
+        after = result["series"]
+        name = md(after["title"]) if after["title"] else "10-man"
+        changes = result["changes"]
+        if changes:
+            text = f"Updated weekly **{name}** `[S{after['id']}]`, from the next game it creates:\n"
+            text += series_lines([after], cfg.tz)
+        else:
+            text = f"Weekly **{name}** `[S{after['id']}]` already has those settings."
+        if result["capped"]:
+            text += f"\nWeekly sign-ups post at most {WEEKLY_MAX_POST_DAYS} days ahead, so post_days was set to that."
+        upcoming, edited = result["upcoming"], result["next"]
+        if edited is not None and edited["changes"]:
+            game = edited["session"]
+            text += f"\nThe upcoming game (<t:{game['start_at']}:f>) was changed too: " \
+                    + "; ".join(change_phrases(edited["changes"])) + "."
+        elif result["next_error"]:
+            text += f"\nThe upcoming game was not changed: {result['next_error']}."
+        elif upcoming is not None and not apply_to_next and changes:
+            text += (f"\nThe upcoming game (<t:{upcoming['start_at']}:f>) keeps its current settings: "
+                     "add `apply_to_next:true`, or use `/tenman edit`, to change it too.")
+        logger.info(f"series {after['id']} updated by {interaction.user.id}: {sorted(changes)}"
+                    + (f"; next game {sorted(edited['changes'])}" if edited else ""))
+        await answer(interaction, text)
+        if edited is not None and edited["changes"] and edited["posted"]:
+            await self._announce_edit(interaction, edited, as_response=False)
+
+    @update.autocomplete("series")
+    async def _update_series(self, interaction, current: str):
+        if not self.bot.in_home_guild(interaction):
+            return []
+        typed = clean_search(current).strip().lower()
+        rows = await self.bot.q.aread(db.channel_series, interaction.channel_id)
+        return [app_commands.Choice(name=series_choice_label(s), value=f"S{s['id']}")
+                for s in rows
+                if typed in ("", f"s{s['id']}", str(s["id"])) or typed in (s["title"] or "10-man").lower()][:25]
+
+    @update.autocomplete("when")
+    async def _update_when(self, interaction, current: str):
+        return await self._when_choices(interaction, current, SCHEDULE_MAX_DAYS)
 
 
 class ConfirmCancel(discord.ui.View):

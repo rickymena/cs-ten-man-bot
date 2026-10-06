@@ -11,6 +11,17 @@ Infrastructure was copied from steam_tracker_bot on 2026-10-04; its history live
 
 Newest sections first.
 
+### Added (edit and update)
+- `/tenman edit [number] [when] [title] [slots] [post_days] [lobby]`: change one game, posted or scheduled, numbered and autocompleted like cancel/lobby. Organizer or moderator only; at least one option; every input through the existing validators
+- Scheduled game: changed quietly (ephemeral reply); `post_at` recomputed with the `/tenman schedule` rule (N days before at the game's wall-clock time, never before now). Without `post_days`, a weekly game uses the series' value and a one-off game reads it back from its `post_at` (default `SCHEDULE_POST_DAYS_BEFORE` if it can't). Weekly games are capped at 6
+- Posted game: roster kept, sign-up redrawn, a public note says what changed (`allowed_mentions` users only, never the role). A smaller roster pings the players pushed onto the waitlist; a bigger one pings those promoted. Can't be moved into the past or more than 30 days ahead; `post_days` is ignored with a note
+- Time change on a posted game: the gameday/starting alert rows are cleared only when their new moment is still ahead, so an alert already sent is never sent twice; daily rows (one per calendar day) are kept; rows mid-send are never touched. A slot change that leaves the roster not full re-arms the "full" alert
+- A default title ("Friday 10-man") follows a new weekday; a custom title is kept
+- `/tenman update [series] [when] [title] [slots] [post_days] [lobby] [apply_to_next]`: change a weekly series for future weeks (`S<id>` from `/tenman list`, autocompleted; `post_days` capped at 6). `apply_to_next:true` also edits the upcoming game (moved to the new weekday on or after its current day); if that game can't be edited the series change still applies and the reply says why
+- Atomic: each edit/update is one `DBQueue` job with `INTERACTION_DB_TIMEOUT` that re-checks the game is still open (not cancelled, started or mid-post) and computes the before/after rosters, so it can't interleave with a click
+- Code: `utils/database.py` `edit_session`, `update_series`, `next_series_session`, `EditRefused`, `default_title`; `bot.py` `edit` / `update` commands, `change_phrases`, `edit_note`, `user_mentions`, `series_token`; `/tenman list` footer mentions edit/update. No schema change (still version 3)
+- Tests: `tests/test_edit.py` (database layer, alert re-arming, v3 database) and `tests/sim/test_edit_e2e.py` (permissions, note without role ping, redraw, hostile input, race with clicks, series update) (322 tests)
+
 ### Security (container hardening)
 - The bot has its own unprivileged user, `tenman` (uid/gid 10001, no shell, no home), created in the image and set as its default `USER`; both compose files run as it (`HOST_UID`/`HOST_GID` removed). Host folders are owned by 10001 (`sudo chown` / `podman unshare chown`); a missing or unwritable folder fails closed with exit 7
 - The bot refuses to start as real root (`running_as_real_root()`, exit 7; rootless Podman's mapped root is allowed; `TENMAN_ALLOW_ROOT=1` overrides)

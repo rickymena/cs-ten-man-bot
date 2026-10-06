@@ -16,6 +16,8 @@ Full documentation lives in `docs/` (every aspect, 01-21, plus a component-level
 | `/tenman list` | Everything coming up in the channel, numbered, plus weekly series. |
 | `/tenman lobby url: https://... [number: N] [whole_series: true]` | Set a game's lobby link (number from `/tenman list`); pings its confirmed players. Works on scheduled games too. |
 | `/tenman cancel [number: N]` | Cancel a game or stop a weekly series (asks to confirm). |
+| `/tenman edit [number: N] [when:] [title:] [slots:] [post_days:] [lobby:]` | Change one game, posted or scheduled; only the options given change. A posted game keeps its roster, its sign-up is redrawn and a short note is posted (players moved onto or off the waitlist by a slot change are pinged, the role never is). Organizer or moderator. |
+| `/tenman update [series: S<id>] [when:] [title:] [slots:] [post_days:] [lobby:] [apply_to_next: true]` | Change a weekly series for the games it creates from now on (`S<id>` as shown in `/tenman list`); `apply_to_next` also changes the upcoming game. Organizer or moderator. |
 
 The `when:` box previews how the bot read the time before you send it ("Sat, Oct 10 at 9:00 PM EDT"). Most phrasings work: `sat 9pm`, `saturday at 9 PM`, `10/10 9pm`, `oct 10 9:30pm`, `fri 9`. Times are in the bot's `TIMEZONE` (Eastern) unless you add one: `sat 9pm ct`, `pt`, `mt`. Discord shows everyone the time in their own zone.
 
