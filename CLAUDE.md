@@ -38,7 +38,7 @@ Running working doc: `docs/working-doc.html` (update it as work progresses; add 
 - Full documentation: `docs/README.md` (aspect docs 01-21, components in 22); update the relevant doc with any behaviour change
 
 - Session lifecycle: `status` open→cancelled|done; `post_state` scheduled→posting→posted. Only open+posted sessions take clicks/alerts
-- Edits (`db.edit_session` / `db.update_series`): one queue job, all checks before the first write. A time change clears only start-tied alert rows (gameday/starting) whose new moment is still ahead; never daily rows or a `sending` row, so no alert is sent twice
+- Edits (`db.edit_session` / `db.update_series`): one queue job, all checks before the first write. A time change re-arms only start-tied alerts (gameday/starting) whose new moment is still ahead, keeping the sent row as `once@<old start>` history; never daily rows or a `sending` row, so no alert is sent twice
 - Schema changes: append to `MIGRATIONS` in `utils/database.py` as an idempotent callable; never rebuild `sessions` (ON DELETE CASCADE wipes signups). Exception: purely additive side tables that older versions can ignore (`series_slots`) are created with IF NOT EXISTS and no version bump, so rollback stays possible
 - Weekly series count weeks by each game's original slot (`series_slots`, falling back to `start_at`), never by a moved game's time; edits keep start-tied alert rows as `once@<old start>` history instead of deleting them
 - Interaction paths use `INTERACTION_DB_TIMEOUT` (2 s) and must always answer (use `answer()`)
