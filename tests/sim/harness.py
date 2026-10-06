@@ -199,6 +199,19 @@ class World:
         await self.cmds.get_command("lobby").callback(self.cmds, it, url, number)
         return it
 
+    async def edit(self, user, number=None, **options) -> FakeInteraction:
+        it = self._it(user)
+        options = {"when": None, "title": None, "slots": None, "post_days": None, "lobby": None, **options}
+        await self.cmds.get_command("edit").callback(self.cmds, it, number, **options)
+        return it
+
+    async def update(self, user, series=None, **options) -> FakeInteraction:
+        it = self._it(user)
+        options = {"when": None, "title": None, "slots": None, "post_days": None, "lobby": None,
+                   "apply_to_next": False, **options}
+        await self.cmds.get_command("update").callback(self.cmds, it, series, **options)
+        return it
+
     async def click(self, user, action, session_id, message_id=None) -> FakeInteraction:
         message_id = message_id or self.message_id(session_id)
         it = self._it(user, FakeMessage(message_id))

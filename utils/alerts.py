@@ -90,8 +90,14 @@ def due_alerts(session: dict, roster: Roster, now: datetime, cfg, states: dict |
     slot = datetime.combine(local_now.date(), cfg.alert_time, tz)
     slot_ts = slot.timestamp()
     on_game_day = datetime.fromtimestamp(start_ts, tz).date() == local_now.date()
+    # A game-day ping already went out today (possibly for a time the game was
+    # since moved from; kept as history under "once@<old start>"): no daily too.
+    pinged_today = any(
+        kind == GAMEDAY and row.get("status") in (db.ALERT_SENT, db.ALERT_AMBIGUOUS)
+        and datetime.fromtimestamp(row.get("updated_at") or 0, tz).date() == local_now.date()
+        for (kind, _key), row in states.items())
     if (opened_ts <= slot_ts <= now_ts and now_ts - slot_ts <= catchup and slot_ts < start_ts
-            and not (on_game_day and (gameday_due or gameday_done))
+            and not (on_game_day and (gameday_due or gameday_done)) and not pinged_today
             and fresh(DAILY, slot.date().isoformat())):
         due.append(DueAlert(DAILY, slot.date().isoformat(), slot))
     return due
