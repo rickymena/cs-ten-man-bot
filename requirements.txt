@@ -1,0 +1,4 @@
+discord.py==2.7.1
+requests==2.34.2
+python-dotenv==1.2.4
+tzdata==2026.5

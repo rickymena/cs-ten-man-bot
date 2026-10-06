@@ -1,0 +1,74 @@
+# Docker Engine deployment (Podman users: compose.yaml).
+#   docker compose -f compose.docker.yaml up -d      start
+#   docker compose -f compose.docker.yaml logs -f    follow logs
+#
+# Before the first `up` (see guides/guide-deploy.txt):
+#   mkdir -p data logs backups secrets && chmod 700 secrets
+#   printf '%s' 'YOUR_BOT_TOKEN'   > secrets/discord_token
+#   printf '%s' 'YOUR_WEBHOOK_URL' > secrets/discord_webhook_url   # or leave the file empty
+#   chmod 600 secrets/*
+#   sudo chown -R 10001:10001 data logs backups secrets   # the bot's own user (tenman)
+#   .env holds the other settings (no token).
+#
+# Hardening, and why:
+#   secrets/           the token is a read-only file under /run/secrets, never an
+#                      environment variable, so `docker inspect` and /proc/<pid>/environ
+#                      don't show it
+#   user               tenman (10001), the bot's own account: no shell, no home, no
+#                      privileges; never root (the bot also refuses to start as real root)
+#   read_only + tmpfs  the code can't be changed at runtime; /tmp can't run programs
+#   cap_drop ALL       the bot needs no Linux capabilities
+#   no-new-privileges  no setuid escalation inside the container
+#   limits             memory, CPU and process caps: a runaway bot can't starve the VPS
+#   pull_policy never  only the image you loaded runs; nothing is pulled by name
+#   folders            create them as the guide says: if one is missing, Docker
+#                      creates it root-owned, tenman can't write it, and the bot
+#                      stops with exit 7 saying so (fails closed)
+#   no ports           the bot only connects out to Discord; nothing listens
+services:
+  bot:
+    image: localhost/tenman-bot:latest
+    pull_policy: never
+    restart: unless-stopped
+    user: "10001:10001"   # tenman, the bot's own unprivileged user (created in the image)
+    env_file: .env
+    environment:
+      DISCORD_TOKEN_FILE: /run/secrets/discord_token
+      DISCORD_WEBHOOK_URL_FILE: /run/secrets/discord_webhook_url
+      DB_PATH: /app/data/tenman.db
+      BACKUP_DIR: /app/backups
+      HEARTBEAT_PATH: /app/logs/heartbeat.json
+    # Short :Z syntax on purpose: it relabels for SELinux on both engines (the long
+    # syntax's bind.selinux isn't applied everywhere, and then SELinux blocks writes).
+    volumes:
+      - ./data:/app/data:Z
+      - ./logs:/app/logs:Z
+      - ./backups:/app/backups:Z
+      # The token lives in files here, read-only, never in an environment variable.
+      # (A plain read-only mount instead of compose `secrets:`: outside Swarm those
+      # are bind mounts too, but compose doesn't relabel them for SELinux.)
+      - ./secrets:/run/secrets:ro,Z
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ipc: private
+    mem_limit: 512m
+    cpus: "1.0"
+    pids_limit: 128
+    init: true
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 2m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

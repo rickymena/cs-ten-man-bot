@@ -1,0 +1,19 @@
+# Lint config for the whole project (retired steam files live in the gitignored deadcode/).
+line-length = 120
+target-version = "py314"
+extend-exclude = ["deadcode"]
+
+[lint]
+# pyflakes, pycodestyle errors, bugbear, async pitfalls, security (bandit), simplifications
+select = ["F", "E", "W", "B", "ASYNC", "S", "UP", "SIM", "PL"]
+ignore = [
+    "E402",    # load_dotenv must run before the utils imports in bot.py / devtool.py
+    "PLR0913", "PLR0912", "PLR0915", "PLR2004", "PLR0911", "PLC0415",
+    "SIM105", "SIM108",
+    "PLR0917", # db functions take (conn, ids..., now) positionally, matching the queue API
+    "ASYNC109",# DBQueue.run(timeout=) is the queue's own bounded wait, not an asyncio timeout
+    "S608",    # f-string SQL: only ever builds "?" placeholder lists and PRAGMA table names from constants
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "PLW0603", "B023", "PLW2901", "SIM117"]

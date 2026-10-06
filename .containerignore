@@ -1,0 +1,22 @@
+# Build context filter. The runtime image copies an explicit allowlist anyway
+# (see Containerfile); this keeps secrets and bulk out of the context.
+.git
+.github
+**/__pycache__/
+**/*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.env
+data/
+logs/
+backups/
+dist/
+.build-tmp/
+docs/
+assets/
+guides/
+*.md
+conov-log.txt
+deploy-test/
+secrets/

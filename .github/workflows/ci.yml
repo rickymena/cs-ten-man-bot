@@ -1,0 +1,76 @@
+# CI: every push and pull request.
+#   lint   ruff (pyflakes, bugbear, bandit security rules, async pitfalls)
+#   test   unit tests + simulated end-to-end runs (fake Discord, real SQLite)
+#   audit  known-vulnerability scan of the pinned runtime dependencies
+#   image  build the dev and runtime images; run the suite inside dev, smoke-test runtime
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:      # reused by deploy.yml so a release only ships after CI passes
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install "$(grep '^ruff==' requirements-dev.txt)"
+      - run: ruff check . --output-format github
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Unit tests
+        run: pytest -q -m "not sim" --junitxml=reports/unit.xml
+      - name: Simulated end-to-end
+        run: pytest -q -m sim -s --junitxml=reports/sim.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: reports/
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install "$(grep '^pip-audit==' requirements-dev.txt)"
+      - run: pip-audit -r requirements.txt --strict
+
+  image:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v5
+      # Same scripts as local runs: build.sh (-f Containerfile, --load,
+      # localhost/tenman-bot names) and the Docker smoke test.
+      - name: Build dev image and run the suite inside it
+        run: |
+          CONTAINER_ENGINE=docker ./build.sh --dev
+          docker run --rm localhost/tenman-bot:dev
+      - name: Docker smoke test (build, export, load, run via compose.docker.yaml; no Discord)
+        run: scripts/docker-smoke.sh

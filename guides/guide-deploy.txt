@@ -1,0 +1,218 @@
+════════════════════════════════════════════════════════════════════════════════
+  CS2 10-Man Bot — Deployment Guide  (Podman or Docker on a VPS)
+  Adapted from the steam tracker's guide. Podman is the default; every
+  step has a Docker equivalent (see "Docker instead of Podman" below).
+════════════════════════════════════════════════════════════════════════════════
+
+  What runs
+  ─────────
+  One container, always on: bot.py. It connects OUT to Discord (no open
+  ports, no domain, no HTTPS, no tunnel needed) and keeps everything in one
+  SQLite file, data/tenman.db. Every 60 s it creates weekly games, posts
+  scheduled sign-ups, closes started games, takes the daily backup
+  (BACKUP_TIME, default 04:00 local) and sends alerts. Every 30 s it writes
+  logs/heartbeat.json, which the container healthcheck reads.
+
+  Host folders mounted into the container (all under the deploy folder):
+    data/      the database          <- the only thing you can't lose
+    backups/   daily verified copies <- copy these off the VPS regularly
+    logs/      tenman.log (rotated), heartbeat.json
+
+  RUN EXACTLY ONE COPY. Two bots with the same token (e.g. your PC and the
+  VPS) both answer every click and both post every alert. Stop the local
+  one before starting the VPS one.
+
+
+  Podman notes  (read first)
+  ──────────────────────────
+  1. SELinux: compose.yaml mounts with :Z. Keep it, or the container gets
+     "Permission denied" on its own folders.
+  2. Reboots: a rootless container only comes back after a reboot if
+     lingering is on AND podman-restart.service is enabled (step A1).
+     Most common silent failure. Test it once: `sudo reboot`, then
+     `podman compose ps` after logging back in.
+  3. Image names are fully qualified (localhost/tenman-bot:latest).
+
+
+  Docker instead of Podman
+  ────────────────────────
+  Everything works the same with Docker Engine; swap the commands:
+    podman ...                         ->  docker ...
+    podman compose ...                 ->  docker compose -f compose.docker.yaml ...
+    (the image is localhost/tenman-bot:latest on both engines)
+    ./build.sh v0.1.0                  ->  CONTAINER_ENGINE=docker ./build.sh v0.1.0
+  Differences that matter:
+    * Folder ownership: the bot runs as its own user, tenman (uid 10001),
+      on both engines. Docker: `sudo chown -R 10001:10001 ...` (step A3).
+      Podman: `podman unshare chown -R 10001:10001 ...` (same uid, inside
+      your user namespace, so `ls -l` shows a high number; that's expected).
+    * Reboots: `sudo systemctl enable --now docker` (no lingering needed).
+    * Your user needs the docker group (`sudo usermod -aG docker $USER`, log
+      out and in) or every command needs sudo.
+    * GitHub deploys: set the repository variable VPS_ENGINE=docker.
+  Check a Docker host before going live (never contacts Discord):
+    scripts/docker-smoke.sh            (or: sudo scripts/docker-smoke.sh)
+
+
+════════════════════════════════════════════════════════════════════════════════
+  PART A — FIRST DEPLOYMENT
+════════════════════════════════════════════════════════════════════════════════
+
+  A1. Prepare the VPS (once)
+  ──────────────────────────
+    Podman:
+    sudo dnf install -y podman podman-compose     # Fedora/RHEL
+    # or: sudo apt install -y podman podman-compose   (Debian/Ubuntu)
+    sudo loginctl enable-linger "$USER"           # your podman user keeps running after logout
+    systemctl --user enable --now podman-restart.service
+                                                  # Podman only honours `restart: unless-stopped`
+                                                  # after a reboot through this service
+    mkdir -p ~/tenman-bot/{data,backups,logs,secrets}
+    Docker instead: install Docker Engine + compose plugin (docs.docker.com/engine/install),
+    sudo systemctl enable --now docker, sudo usermod -aG docker $USER (log out/in),
+    and the same mkdir. Optionally give uid 10001 a name on the host, so `ls -l`
+    shows "tenman" (a system account: no login, no home):
+      sudo groupadd --gid 10001 tenman
+      sudo useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin tenman
+
+  A2. Discord application (once)  — already done for cs-10-man-bot
+  ─────────────────────────────────────────────────────────────────
+    discord.com/developers/applications -> the app
+      Bot tab: token -> DISCORD_TOKEN. Privileged intents: all OFF.
+      General Information: Interactions Endpoint URL must stay EMPTY.
+    Invite (scopes bot + applications.commands, permissions 216064):
+      https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=216064
+    In the 10-man channel's permissions, the bot needs: View Channel, Send
+    Messages, Embed Links, Read Message History, Mention Everyone (the
+    @10 Manner role is not mentionable, so pinging it needs this).
+
+  A3. Settings on the VPS
+  ───────────────────────
+    1. The token and webhook go in files, not .env (an environment variable
+       shows up in `docker inspect`; a file under /run/secrets doesn't):
+         cd ~/tenman-bot && chmod 700 secrets
+         printf '%s' 'YOUR_BOT_TOKEN'   > secrets/discord_token
+         printf '%s' 'YOUR_WEBHOOK_URL' > secrets/discord_webhook_url   # optional; may stay empty
+         chmod 600 secrets/*
+    2. Copy .env.sample to .env and fill in GUILD_ID, CHANNEL_ID,
+       TENMAN_ROLE_ID (and anything else you change). Delete the
+       DISCORD_TOKEN / DISCORD_WEBHOOK_URL lines from it.  chmod 600 .env
+    3. Hand the folders to the bot's user, tenman (uid 10001):
+         Docker:  sudo chown -R 10001:10001 data logs backups secrets
+         Podman:  podman unshare chown -R 10001:10001 data logs backups secrets
+       A folder it can't write, or a missing one, stops the bot with exit 7
+       and the fix; it never falls back to running as root.
+    The token lives ONLY in secrets/. Never in git, the image, .env or CI logs.
+
+  A4. Get the image onto the VPS — pick one
+  ─────────────────────────────────────────
+    a) By hand, from your PC:
+         ./build.sh v0.1.0                      # builds + saves dist/tenman-bot-v0.1.0.tar
+         scp dist/tenman-bot-v0.1.0.tar compose.yaml you@vps:~/tenman-bot/
+         ssh you@vps 'podman load -i ~/tenman-bot/tenman-bot-v0.1.0.tar'
+       The archive carries both tags, v0.1.0 and latest; compose runs latest.
+       Docker: CONTAINER_ENGINE=docker ./build.sh v0.1.0, copy compose.docker.yaml,
+       `docker load -i ...`. An image built with either engine loads in either.
+    b) Automatically with GitHub Actions (PART C): push a tag, it ships.
+
+  A5. Start it
+  ────────────
+    cd ~/tenman-bot
+    podman compose up -d
+    podman compose logs -f          # expect: "Logged in as ..." and
+                                    #         "channel access ok: #<channel>, pings @10 Manner"
+    A config problem stops it immediately with "bad settings in .env: ..."
+    (exit code 7) listing every problem; fix .env and `podman compose up -d`.
+    "DISCORD_TOKEN_FILE=... can't be read (Permission denied)": step A3.3
+    (ownership) was skipped. "refusing to run as root": a compose file was
+    edited to run as root; put back `user: "10001:10001"`.
+
+  A6. Moving the test database from your PC (optional)
+  ────────────────────────────────────────────────────
+    Stop the bot on your PC first, then:
+      .venv/bin/python -m utils.backup                     # verified copy into backups/
+      scp backups/backup_tenman_<newest>.sqlite3.gz you@vps:~/tenman-bot/backups/
+      on the VPS, after A3.3 and BEFORE the first `up` (runs as tenman):
+        podman run --rm -v ./backups:/b:Z -v ./data:/d:Z localhost/tenman-bot:latest \
+          python -m utils.backup --restore /b/backup_tenman_<newest>.sqlite3.gz /d/tenman.db
+      (the copied backup must be readable by uid 10001: repeat the A3.3 chown on backups)
+    Or start fresh: an empty data/ folder creates a new database.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  PART B — DAY TO DAY
+════════════════════════════════════════════════════════════════════════════════
+
+  Status       podman compose ps            (healthy / unhealthy)
+               podman healthcheck run $(podman compose ps -q bot)   -> prints the reason
+  Logs         podman compose logs -f       or  tail -f logs/tenman.log
+  Restart      podman compose restart
+  Update       load the new image (A4), then  podman compose up -d
+               Schema changes migrate automatically on start; take a backup first:
+               podman compose exec bot python -m utils.backup
+
+  Backups      Daily at BACKUP_TIME into backups/: backup_tenman_<time>.sqlite3.gz
+               + .sha256. Each is read back and integrity-checked before it gets
+               its final name. 30 days kept, never fewer than the newest 7.
+               Verify one:   podman compose exec bot python -m utils.backup --verify /app/backups/<file>
+               Copy them off the VPS now and then (rsync/scp): a backup on the
+               same disk doesn't survive that disk.
+
+  Restore      podman compose stop
+               podman run --rm -v ./backups:/b:Z -v ./data:/d:Z localhost/tenman-bot:latest sh -c '
+                 python -m utils.backup --restore /b/<file> /d/tenman.db.restored &&
+                 mv /d/tenman.db /d/tenman.db.broken && mv /d/tenman.db.restored /d/tenman.db &&
+                 rm -f /d/tenman.db-wal /d/tenman.db-shm'
+               podman compose start
+               (done inside the container, as tenman, so ownership stays right;
+               restore refuses to overwrite an existing file on purpose)
+
+  Healthcheck  Unhealthy when: the loop stalls (> 2 min), Discord has been
+               disconnected > 10 min, or one database job runs > 60 s.
+               "Unhealthy" alone does not restart or alert anyone. For a
+               restart on failure, run it under systemd (podman generate
+               systemd / Quadlet) or add a cron that restarts on unhealthy.
+
+
+════════════════════════════════════════════════════════════════════════════════
+  PART C — CI/CD WITH GITHUB ACTIONS
+════════════════════════════════════════════════════════════════════════════════
+
+  CI   (.github/workflows/ci.yml) on every push / pull request:
+       lint (ruff), unit tests, simulated end-to-end runs, pip-audit,
+       dev + runtime image build, tests inside the image, no-secrets smoke test.
+       Same checks locally:  scripts/ci.sh   (add --image for the container part)
+
+  CD   (.github/workflows/deploy.yml) when you push a tag v*:
+       reruns CI, builds the runtime image, scp's it to the VPS, loads it,
+       `podman compose up -d`, then runs the healthcheck.
+
+       One-time setup:
+         1. On the VPS: create a deploy key for your user
+              ssh-keygen -t ed25519 -f ~/deploy_key -N ""   (on your PC)
+              append deploy_key.pub to the VPS user's ~/.ssh/authorized_keys
+         2. GitHub repo -> Settings -> Secrets and variables -> Actions:
+              VPS_HOST         vps hostname or IP
+              VPS_USER         the user running podman
+              VPS_SSH_KEY      contents of deploy_key (private)
+              VPS_KNOWN_HOSTS  output of: ssh-keyscan <VPS_HOST>
+              VPS_PATH         /home/<user>/tenman-bot
+         3. GitHub -> Settings -> Environments -> "production": optionally
+            require your approval before each deploy.
+       Release:  git tag v0.1.0 && git push origin v0.1.0
+
+
+════════════════════════════════════════════════════════════════════════════════
+  PART D — FIRST LIVE CHECK (2 minutes, after deploying)
+════════════════════════════════════════════════════════════════════════════════
+
+    1. /tenman start when: tomorrow 9pm  -> post appears, you're listed In
+    2. Click Out, In, +1 Guest, -1 Guest, Maybe -> post updates each time
+    3. /tenman lobby url: https://popflash.site/test -> link + roster pinged
+    4. /tenman schedule when: sat 9pm repeat: weekly weeks: 2
+       /tenman list -> shows it as "scheduled, posts ..." and the series
+    5. /tenman cancel -> numbered list; cancel both test games
+       (on the weekly one choose "Stop the whole series")
+    6. podman compose ps -> healthy;  ls backups/ -> today's backup after BACKUP_TIME
+    Every one of these pings @10 Manner if TENMAN_ROLE_ID is set: do this in a
+    test channel, or tell the group first.

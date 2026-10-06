@@ -1,0 +1,72 @@
+# CD: deploy a tagged release to the VPS (or run it by hand from the Actions tab).
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# Builds the runtime image, copies it to the VPS over SSH, loads it into
+# Podman (default) or Docker, and restarts the compose stack. No third-party actions: only
+# ssh/scp with a key you control.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   VPS_HOST         hostname or IP
+#   VPS_USER         the (non-root) user that runs podman
+#   VPS_SSH_KEY      private key for that user (a deploy-only key)
+#   VPS_KNOWN_HOSTS  output of `ssh-keyscan VPS_HOST` (pins the host key)
+#   VPS_PATH         directory on the VPS holding the compose file and .env
+# Optional repository VARIABLE (Settings -> Variables):
+#   VPS_ENGINE       podman (default) or docker -- what the VPS runs
+# The .env with the bot token lives only on the VPS; it is never in the repo,
+# the image or this workflow.
+name: deploy
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: checks
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - name: "Build runtime image (build.sh tags localhost/tenman-bot:<tag> and :latest)"
+        run: |
+          CONTAINER_ENGINE=docker ./build.sh "${GITHUB_REF_NAME}"
+          mv "dist/tenman-bot-${GITHUB_REF_NAME}.tar" tenman-bot.tar
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: Ship and restart
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          USER_: ${{ secrets.VPS_USER }}
+          DEST: ${{ secrets.VPS_PATH }}
+          ENGINE: ${{ vars.VPS_ENGINE || 'podman' }}
+        run: |
+          case "$ENGINE" in
+            podman) COMPOSE_FILE=compose.yaml ;;
+            docker) COMPOSE_FILE=compose.docker.yaml ;;
+            *) echo "VPS_ENGINE must be podman or docker, got '$ENGINE'"; exit 1 ;;
+          esac
+          ssh_() { ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$USER_@$HOST" "$@"; }
+          scp -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes tenman-bot.tar "$COMPOSE_FILE" "$USER_@$HOST:$DEST/"
+          # The healthcheck runs the image's own check inside the container after start-up.
+          ssh_ "cd '$DEST' && $ENGINE load -i tenman-bot.tar && rm tenman-bot.tar \
+                && $ENGINE compose -f $COMPOSE_FILE up -d && sleep 90 \
+                && $ENGINE compose -f $COMPOSE_FILE exec -T bot python3 /app/healthcheck.py"

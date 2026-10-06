@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Project specific
+logs/
+backups/
+dist/
+.env
+sudo_tee_env.txt
+
+# Tests
+tests/reports/
+.pytest_cache/
+
+# Node (Codex / tooling artifacts)
+node_modules/
+package-lock.json
+
+# Retired files — kept on disk for recovery, out of the repo
+deadcode/
+
+# Pentest run artifacts — captures, target logs, tester scratch. The harness
+# itself (mocks, fixtures, compose) is tracked; only its output is not.
+pentest/workspace/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# build.sh layer staging (kept off the 2GB /var/tmp tmpfs)
+.build-tmp/
+
+# SQLite database and its WAL/SHM files
+data/
+
+# Tooling caches
+.ruff_cache/
+reports/
+
+# Raw Discord channel export used for planning: real usernames, keep out of git
+conov-log.txt
+
+# Local rehearsal of a VPS deploy (has a copy of .env)
+deploy-test/
+
+# Project documentation and the working doc: kept locally, not in git
+docs/
+
+# Container secrets (bot token, webhook URL): never in git
+secrets/
