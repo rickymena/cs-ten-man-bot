@@ -27,7 +27,7 @@ Branch `feature/edit-update`, from `v0.1.0`.
 - `daily` rows are never cleared: they are keyed by calendar date, so a day that already had its daily alert won't get a second one.
 - Rows in `sending` (in flight) are never touched.
 - `full`: cleared when a slot change leaves the roster not full, so "is full" fires again once the bigger roster fills; kept if the roster is still full.
-- Known edge: moving a game to another day after that day's game-day alert can let the old day's daily (if still inside the catch-up window and not yet sent) go out later that day.
+- Moving a game after its game-day alert went out keeps that alert as history (`once@<old start>`), so the alert for the new time can still fire, and no daily alert goes out on a day a game-day ping already did (no double ping).
 
 ## /tenman update
 
@@ -50,5 +50,6 @@ Every edit/update is one `DBQueue` job (`INTERACTION_DB_TIMEOUT`, 2 s) that re-r
 ## Not included
 
 - No way to clear a lobby link or reset a custom title back to the default.
-- Moving a weekly game past the next week's slot makes the series skip that week (it always creates the next occurrence after the latest game).
+- Moving a weekly game never skips a week: each series game remembers its original weekly slot in the `series_slots` table, and the series counts weeks by slot. Move Friday the 9th to Sunday the 18th and Friday the 16th is still created.
+- `series_slots` is a new table created on start WITHOUT a schema version bump (the database stays at version 3), so rolling back to v0.1.0 still works: v0.1.0 ignores the table.
 - `docs/` (gitignored, not in this worktree) still needs the matching updates: commands, alerts and components docs, and a progress-log row in `docs/working-doc.html`.

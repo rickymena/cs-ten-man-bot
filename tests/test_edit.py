@@ -323,3 +323,72 @@ def test_a_v3_database_works_unchanged(tmp_path):
         assert q.call(db.update_series, 1, tz=ET, now=ts(NOW), slots=12)["series"]["slots"] == 12
     finally:
         q.stop()
+
+
+# --------------------------------------------------------------------------- edge cases fixed after review
+
+def series_starts(q, series_id):
+    return [datetime.fromtimestamp(r[0], ET) for r in q.read(lambda c: c.execute(
+        "SELECT start_at FROM sessions WHERE series_id = ? AND status = 'open' ORDER BY start_at",
+        (series_id,)).fetchall())]
+
+
+def test_moving_a_weekly_game_past_next_week_never_skips_that_week(q):
+    series_id = make_series(q)                                    # Fridays 9 pm
+    q.call(db.materialize_series, NOW, ET)                        # creates Fri Oct 9
+    first = series_starts(q, series_id)
+    assert first == [FRIDAY]
+    sid = q.read(lambda c: c.execute("SELECT id FROM sessions WHERE series_id = ?", (series_id,)).fetchone()[0])
+    edit(q, sid, now=at(6, 10), start_at=ts(datetime(2026, 10, 18, 21, 0, tzinfo=ET)))   # moved to Sun Oct 18
+
+    q.call(db.materialize_series, at(10, 0, 5), ET)               # Fri 9 slot has passed
+    assert series_starts(q, series_id) == [datetime(2026, 10, 16, 21, 0, tzinfo=ET),
+                                           datetime(2026, 10, 18, 21, 0, tzinfo=ET)], "week of the 16th was skipped"
+    q.call(db.materialize_series, datetime(2026, 10, 17, 0, 5, tzinfo=ET), ET)
+    assert datetime(2026, 10, 23, 21, 0, tzinfo=ET) in series_starts(q, series_id), "rhythm continues weekly"
+
+
+def test_moving_the_first_weekly_game_keeps_its_slot_even_without_a_slot_row(q):
+    # The first game of a series comes from /tenman schedule, not materialize_series,
+    # so it has no slot row until it is moved.
+    series_id = make_series(q)
+    sid = scheduled(q, series_id=series_id)
+    edit(q, sid, now=NOW, start_at=ts(datetime(2026, 10, 18, 21, 0, tzinfo=ET)))
+    assert q.read(lambda c: c.execute("SELECT slot_at FROM series_slots WHERE session_id = ?",
+                                      (sid,)).fetchone()[0]) == ts(FRIDAY)
+    q.call(db.materialize_series, at(10, 0, 5), ET)
+    assert datetime(2026, 10, 16, 21, 0, tzinfo=ET) in series_starts(q, series_id)
+
+
+def test_moving_twice_keeps_the_original_slot(q):
+    series_id = make_series(q)
+    q.call(db.materialize_series, NOW, ET)
+    sid = q.read(lambda c: c.execute("SELECT id FROM sessions WHERE series_id = ?", (series_id,)).fetchone()[0])
+    edit(q, sid, now=at(6, 10), start_at=ts(SATURDAY))
+    edit(q, sid, now=at(6, 11), start_at=ts(datetime(2026, 10, 11, 21, 0, tzinfo=ET)))
+    assert q.read(lambda c: c.execute("SELECT slot_at FROM series_slots WHERE session_id = ?",
+                                      (sid,)).fetchone()[0]) == ts(FRIDAY)
+
+
+def test_no_daily_ping_after_a_gameday_ping_on_the_same_day_even_if_the_game_moved(q, cfg):
+    sid = posted(q, start=at(9, 13), players=6)                   # Friday 1 pm game
+    send = Recorder()
+    alerts.run_alerts_once(q, send, cfg, now=at(9, 11, 0))      # gameday alert (2 h before)
+    assert len(send.kinds) == 1
+    edit(q, sid, now=at(9, 11, 30), start_at=ts(SATURDAY))      # moved to Saturday 9 pm
+    assert alert_rows(q, sid).get(("gameday", f"once@{ts(at(9, 13))}")) == db.ALERT_SENT, "history kept"
+    alerts.run_alerts_once(q, send, cfg, now=at(9, 12, 0))      # Friday noon: no longer game day
+    assert len(send.kinds) == 1, "two pings on Friday"
+    alerts.run_alerts_once(q, send, cfg, now=at(10, 12, 0))     # Saturday noon daily
+    alerts.run_alerts_once(q, send, cfg, now=at(10, 19, 0))     # Saturday gameday for the new time
+    assert len(send.kinds) == 3
+
+
+def test_series_slots_table_needs_no_schema_bump(tmp_path):
+    q = DBQueue(str(tmp_path / "x.db"), init=db.ensure_schema)
+    q.start()
+    try:
+        assert q.read(lambda c: c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]) == 3
+        assert q.read(lambda c: c.execute("SELECT name FROM sqlite_master WHERE name = 'series_slots'").fetchone())
+    finally:
+        q.stop()

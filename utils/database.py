@@ -127,6 +127,19 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 """
 
+# The weekly slot each series game was created for. A game moved with
+# /tenman edit keeps its slot here, so the series keeps its weekly rhythm
+# instead of counting from the moved time (which skipped a week). Additive and
+# created with IF NOT EXISTS on every start, deliberately WITHOUT a schema
+# version bump: v0.1.0 ignores an unknown table, so rolling back stays safe.
+# Sessions with no row here (created before this table) use their start_at.
+SERIES_SLOTS_DDL = """
+CREATE TABLE IF NOT EXISTS series_slots (
+    session_id  INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    slot_at     INTEGER NOT NULL
+);
+"""
+
 # Indexes on columns that a migration adds: created after migrations run, so
 # an old database gets its columns before an index refers to them.
 POST_DDL = """
@@ -220,7 +233,7 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
                              (version, int(time.time())))
                 logger.info(f"Applied schema migration {version}")
         current = LATEST_SCHEMA_VERSION
-    for statement in _split(POST_DDL):
+    for statement in _split(POST_DDL + SERIES_SLOTS_DDL):
         conn.execute(statement)
     return current
 
@@ -446,16 +459,18 @@ def materialize_series(conn, now: datetime, tz) -> list[int]:
     Returns new ids.
     """
     created = []
+    # A game's weekly slot: where it was created, even if /tenman edit moved it since.
+    slot = "COALESCE((SELECT slot_at FROM series_slots WHERE session_id = sessions.id), start_at)"
     for series in _rows(conn.execute("SELECT * FROM series WHERE active = 1")):
         ahead = conn.execute(
-            "SELECT MAX(start_at) FROM sessions WHERE series_id = ? AND status = 'open'", (series["id"],)
+            f"SELECT MAX({slot}) FROM sessions WHERE series_id = ? AND status = 'open'", (series["id"],)
         ).fetchone()[0]
         if ahead is not None and ahead > now.timestamp():
             continue
         if series["remaining"] is not None and series["remaining"] <= 0:
             conn.execute("UPDATE series SET active = 0 WHERE id = ?", (series["id"],))
             continue
-        last = conn.execute("SELECT MAX(start_at) FROM sessions WHERE series_id = ?", (series["id"],)).fetchone()[0]
+        last = conn.execute(f"SELECT MAX({slot}) FROM sessions WHERE series_id = ?", (series["id"],)).fetchone()[0]
         local_now = now.astimezone(tz)
         day = local_now.date() + timedelta(days=(series["weekday"] - local_now.weekday()) % 7)
         start = occurrence(day, series["local_time"], tz)
@@ -471,6 +486,8 @@ def materialize_series(conn, now: datetime, tz) -> list[int]:
                              start_at=int(start.timestamp()), created_by=series["created_by"],
                              slots=series["slots"], now=int(now.timestamp()), post_at=post_at,
                              series_id=series["id"], lobby_url=series["lobby_url"])
+        conn.execute("INSERT OR REPLACE INTO series_slots (session_id, slot_at) VALUES (?, ?)",
+                     (sid, int(start.timestamp())))
         if series["remaining"] is not None:
             conn.execute("UPDATE series SET remaining = remaining - 1 WHERE id = ?", (series["id"],))
         created.append(sid)
@@ -588,6 +605,11 @@ def edit_session(conn, session_id: int, *, tz, now=None, start_at: int | None = 
     before = list_signups(conn, session_id)
     result = {"before_session": session, "posted": posted, "changes": changes, "before": before,
               "after": before, "demoted": [], "promoted": [], "alerts_reset": [], "notes": notes}
+    if changes and "start_at" in changes and session.get("series_id"):
+        # Keep the weekly slot this game was created for (first move only), so
+        # the series doesn't count its next week from the moved time.
+        conn.execute("INSERT OR IGNORE INTO series_slots (session_id, slot_at) VALUES (?, ?)",
+                     (session_id, session["start_at"]))
     if changes:
         conn.execute(
             "UPDATE sessions SET title = ?, start_at = ?, slots = ?, lobby_url = ?, post_at = ? "
@@ -611,16 +633,25 @@ def _reset_alerts(conn, session_id: int, changes: dict, full: bool, now: int, ga
         new_start = changes["start_at"][1]
         moments = {"gameday": new_start - gameday_hours * 3600, "starting": new_start}
     reset = []
-    for row in conn.execute("SELECT kind, slot_key, status FROM alerts WHERE session_id = ?", (session_id,)):
+    for row in conn.execute("SELECT kind, slot_key, status FROM alerts WHERE session_id = ? AND slot_key = 'once'",
+                            (session_id,)):
         if row["status"] == ALERT_SENDING:
             continue
         stale = (row["kind"] in _START_TIED_ALERTS and row["kind"] in moments and moments[row["kind"]] > now) \
             or (row["kind"] == "full" and "slots" in changes and not full)
         if stale:
             reset.append((row["kind"], row["slot_key"]))
+    old_start = changes["start_at"][0] if "start_at" in changes else 0
     for kind, slot_key in reset:
-        conn.execute("DELETE FROM alerts WHERE session_id = ? AND kind = ? AND slot_key = ?",
-                     (session_id, kind, slot_key))
+        if kind in _START_TIED_ALERTS:
+            # Kept as history under "once@<old start>" instead of deleted: the
+            # alert for the new time can go out, and the daily rule can still
+            # see that a game-day ping already went out today (no double ping).
+            conn.execute("UPDATE OR REPLACE alerts SET slot_key = ? WHERE session_id = ? AND kind = ? "
+                         "AND slot_key = ?", (f"{slot_key}@{old_start}", session_id, kind, slot_key))
+        else:
+            conn.execute("DELETE FROM alerts WHERE session_id = ? AND kind = ? AND slot_key = ?",
+                         (session_id, kind, slot_key))
     return reset
 
 

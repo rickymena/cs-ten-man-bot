@@ -39,7 +39,8 @@ Running working doc: `docs/working-doc.html` (update it as work progresses; add 
 
 - Session lifecycle: `status` open→cancelled|done; `post_state` scheduled→posting→posted. Only open+posted sessions take clicks/alerts
 - Edits (`db.edit_session` / `db.update_series`): one queue job, all checks before the first write. A time change clears only start-tied alert rows (gameday/starting) whose new moment is still ahead; never daily rows or a `sending` row, so no alert is sent twice
-- Schema changes: append to `MIGRATIONS` in `utils/database.py` as an idempotent callable; never rebuild `sessions` (ON DELETE CASCADE wipes signups)
+- Schema changes: append to `MIGRATIONS` in `utils/database.py` as an idempotent callable; never rebuild `sessions` (ON DELETE CASCADE wipes signups). Exception: purely additive side tables that older versions can ignore (`series_slots`) are created with IF NOT EXISTS and no version bump, so rollback stays possible
+- Weekly series count weeks by each game's original slot (`series_slots`, falling back to `start_at`), never by a moved game's time; edits keep start-tied alert rows as `once@<old start>` history instead of deleting them
 - Interaction paths use `INTERACTION_DB_TIMEOUT` (2 s) and must always answer (use `answer()`)
 - No emoji in message text; emoji only on the sign-up buttons
 - Never run a second bot instance with the same token (local + VPS) — both would answer clicks and post alerts
