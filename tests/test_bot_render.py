@@ -40,8 +40,8 @@ def test_numbered_list_and_autocomplete_labels(q, make_session):
     from utils.embeds import choice_label, numbered_lines
 
     start = datetime(2026, 10, 9, 21, 0, tzinfo=ET).timestamp()
-    sid = make_session(start, title="Friday 10-man")
-    q.call(db.set_status, sid, "a", "A", db.IN)
+    sid = make_session(start, created_at=start - 86400, title="Friday 10-man")
+    q.call(db.set_status, sid, "a", "A", db.IN, now=start - 3600)
     session = q.read(db.get_session, sid)
     roster = build_roster(q.read(db.list_signups, sid), 10)
 

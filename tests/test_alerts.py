@@ -97,7 +97,7 @@ def test_dropping_below_full_resumes_daily_alerts(q, cfg, make_session):
     sid = setup(q, make_session, players=10)
     send = Recorder()
     alerts.run_alerts_once(q, send, cfg, now=at(6, 12, 0))
-    q.call(db.set_status, sid, "u0", "user0", db.OUT)
+    q.call(db.set_status, sid, "u0", "user0", db.OUT, now=at(6, 13, 0).timestamp())
     alerts.run_alerts_once(q, send, cfg, now=at(7, 12, 0))
     assert "needs **1 more**" in send.sent[-1][0]
 
