@@ -1,4 +1,4 @@
-# Lint config for the whole project (retired steam files live in the gitignored deadcode/).
+# Lint config for the whole project (deadcode/ is local scratch, never tracked).
 line-length = 120
 target-version = "py314"
 extend-exclude = ["deadcode"]

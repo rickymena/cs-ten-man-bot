@@ -1,19 +1,18 @@
 """
-Discord webhook delivery, adapted from the steam tracker.
+Discord webhook delivery.
 
-Delivery contract (unchanged from the steam tracker, review finding H2):
+Delivery contract:
 
 * A message is POSTed once and retried ONLY when the failure proves Discord
   never received the request (connect error / connect timeout / 5xx / 408 /
   429). A read timeout or a connection dropped mid-response is *ambiguous* --
   Discord may already have posted it -- so it is never retried. For the bot
-  that means a flaky network can cost one alert, but never ping @10 Manner
+  that means a flaky network can cost one alert, but never ping the role
   twice.
 * The webhook URL (which embeds a secret token) is never written to the log;
   request exceptions are reported by class name only.
 
-The steam-specific batching (game lists split under 2000 characters) is gone:
-bot messages are short, and send_message() refuses anything over the limit.
+Bot messages are short; send_message() refuses anything over Discord's limit.
 """
 
 import logging

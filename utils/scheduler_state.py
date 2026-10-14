@@ -1,9 +1,8 @@
 """
-Heartbeat persistence, kept from the steam tracker's scheduler_state.py.
+Heartbeat persistence.
 
 The file is written atomically (tmp -> os.replace) so healthcheck.py never
-reads a torn heartbeat. The steam scheduler's per-job state machine is
-retired (deadcode/): the bot's loop in bot.py replaced it.
+reads a torn heartbeat.
 """
 
 import json

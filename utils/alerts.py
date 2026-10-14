@@ -9,7 +9,7 @@ Schedule per open, posted session, in the bot's TIMEZONE:
   full     once, the first time the roster fills; daily alerts stop while full
   starting once, at start time: pings the confirmed players with the lobby link
 
-Missed slots follow the steam scheduler's rule: sent late if at most
+Missed slots follow one rule: sent late if at most
 ALERT_CATCHUP_HOURS overdue, otherwise not at all. Each (session, kind, slot)
 is claimed in the alerts table before the POST and finished after it, so
 restarts and overlapping passes can never double-post. Instants are compared

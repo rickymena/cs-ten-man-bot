@@ -1,6 +1,6 @@
 ════════════════════════════════════════════════════════════════════════════════
   CS2 10-Man Bot — Deployment Guide  (Podman or Docker on a VPS)
-  Adapted from the steam tracker's guide. Podman is the default; every
+  Podman is the default; every
   step has a Docker equivalent (see "Docker instead of Podman" below).
 ════════════════════════════════════════════════════════════════════════════════
 
@@ -75,8 +75,8 @@
       sudo groupadd --gid 10001 tenman
       sudo useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin tenman
 
-  A2. Discord application (once)  — already done for cs-10-man-bot
-  ─────────────────────────────────────────────────────────────────
+  A2. Discord application (once)
+  ──────────────────────────────
     discord.com/developers/applications -> the app
       Bot tab: token -> DISCORD_TOKEN. Privileged intents: all OFF.
       General Information: Interactions Endpoint URL must stay EMPTY.
@@ -84,7 +84,7 @@
       https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=216064
     In the 10-man channel's permissions, the bot needs: View Channel, Send
     Messages, Embed Links, Read Message History, Mention Everyone (the
-    @10 Manner role is not mentionable, so pinging it needs this).
+    10-man role is not mentionable, so pinging it needs this).
 
   A3. Settings on the VPS
   ───────────────────────
@@ -120,7 +120,7 @@
     cd ~/tenman-bot
     podman compose up -d
     podman compose logs -f          # expect: "Logged in as ..." and
-                                    #         "channel access ok: #<channel>, pings @10 Manner"
+                                    #         "channel access ok: #<channel>, pings @<role>"
     A config problem stops it immediately with "bad settings in .env: ..."
     (exit code 7) listing every problem; fix .env and `podman compose up -d`.
     "DISCORD_TOKEN_FILE=... can't be read (Permission denied)": step A3.3
@@ -214,5 +214,5 @@
     5. /tenman cancel -> numbered list; cancel both test games
        (on the weekly one choose "Stop the whole series")
     6. podman compose ps -> healthy;  ls backups/ -> today's backup after BACKUP_TIME
-    Every one of these pings @10 Manner if TENMAN_ROLE_ID is set: do this in a
+    Every one of these pings the role if TENMAN_ROLE_ID is set: do this in a
     test channel, or tell the group first.

@@ -16,8 +16,7 @@ Two rules, applied everywhere:
 
 SQL needs neither: every query in utils/database.py uses bound parameters.
 
-clean_text() is the steam tracker's _clean_text (utils/scrapesteam.py),
-extended to drop invisible format characters as well.
+clean_text() also drops invisible format characters.
 """
 
 import ipaddress

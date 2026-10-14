@@ -14,7 +14,7 @@ Every database write goes through utils/db_queue.py (single writer). Buttons
 are DynamicItems keyed by session id, so they keep working after a restart.
 A 60 s loop creates weekly occurrences, posts scheduled sign-ups, closes
 started games, takes the daily backup and runs the alerts; a 30 s loop
-writes the heartbeat. Full documentation: docs/README.md.
+writes the heartbeat. See README.md.
 """
 
 import asyncio

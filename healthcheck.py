@@ -1,6 +1,5 @@
 """
 Container healthcheck for the bot. Stdlib only; exits 0 healthy, 1 not.
-Ported from the steam tracker's healthcheck.py.
 
 Reads the heartbeat bot.py writes every 30 s and fails when any of these hold:
 

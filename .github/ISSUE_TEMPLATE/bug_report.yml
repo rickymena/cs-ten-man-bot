@@ -1,0 +1,35 @@
+name: Bug report
+description: Something the bot did wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what the bot did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. /tenman start when: sat 9pm
+        2. Click In with two accounts at the same time
+        3. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines from `logs/` or `podman compose logs`. Remove tokens, webhook URLs and usernames first.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: v0.2.0, or a commit hash
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: How it's running
+      options: [Podman, Docker, "Directly (python bot.py)"]

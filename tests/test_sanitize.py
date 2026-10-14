@@ -108,7 +108,7 @@ def test_clean_search_is_bounded():
 # ----------------------------------------------------------------- lobby links
 
 @pytest.mark.parametrize("url", [
-    "https://popflash.site/-/wiggz/scrim",
+    "https://popflash.site/-/example/scrim",
     "https://popflash.site/scrim/abc?x=1#frag",
     "https://sub.example.com:443/path",
 ])

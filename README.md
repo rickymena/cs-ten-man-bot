@@ -1,10 +1,31 @@
+<div align="center">
+
+<img src="assets/avatar.png" alt="A chicken in a tactical helmet and plate carrier, with a CS2 patch" width="220">
+
 # CS2 10-Man Bot
 
-A Discord bot that gets ten players into a Counter-Strike 2 game without anyone having to chase people in the channel.
+**Get ten players into a Counter-Strike 2 game without chasing anyone in the channel.**
 
-It posts one sign-up message, keeps a first-come roster and waitlist, and pings the group daily with how many players are still needed (plus once more 2 hours before a game that's still short). When the game starts, it hands the confirmed ten the lobby link.
+[![CI](https://github.com/rickymena/cs-ten-man-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/rickymena/cs-ten-man-bot/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![Python 3.14](https://img.shields.io/badge/python-3.14-3776AB.svg?logo=python&logoColor=white)
+![discord.py 2.7](https://img.shields.io/badge/discord.py-2.7-5865F2.svg?logo=discord&logoColor=white)
 
-Full documentation lives in `docs/` (every aspect, 01-21, plus a component-level reference, 22). It is kept locally and not checked into the repository.
+</div>
+
+---
+
+The bot posts one sign-up message with buttons. It keeps a first-come roster and a waitlist, and it pings the group with how many players are still needed until the game is full. When the game starts, it hands the confirmed ten the lobby link.
+
+## Features
+
+- **One-click sign-ups.** In, Maybe, Out, +1 Guest and -1 Guest buttons. The first ten "In" play; everyone else waits in order and moves up automatically, with a ping, when someone drops.
+- **Countdown alerts.** A daily "need N more" while the game is short, another ping a few hours before start, one when the roster fills, and a "starting now" with the lobby link for the confirmed players.
+- **Scheduling.** Save a game now and its sign-up posts by itself a few days ahead. Weekly series create each week's game on their own.
+- **Plain-English times.** `sat 9pm`, `saturday at 9 PM`, `10/10 9pm`, `fri 9 ct`. The `when:` box previews how the bot read the time before you send it, and Discord shows everyone the time in their own zone.
+- **Edits that keep the roster.** Move a game, rename it or change the slots without losing who signed up. Players pushed onto or off the waitlist are told.
+- **Safe by default.** User text never pings anyone, every input is validated and escaped, and simultaneous clicks can't race. An alert is never posted twice, even across crashes and restarts.
+- **Small footprint.** One process, SQLite and four runtime dependencies. Runs in a hardened, non-root container with daily verified backups.
 
 ## Commands
 
@@ -14,38 +35,89 @@ Full documentation lives in `docs/` (every aspect, 01-21, plus a component-level
 | `/tenman schedule when: fri 9pm` | Save a game; its sign-up posts automatically 3 days before (`post_days:` to change). |
 | `/tenman schedule when: fri 9pm repeat: weekly [weeks: 4]` | A weekly series; each week's sign-up posts by itself. |
 | `/tenman list` | Everything coming up in the channel, numbered, plus weekly series. |
-| `/tenman lobby url: https://... [number: N] [whole_series: true]` | Set a game's lobby link (number from `/tenman list`); pings its confirmed players. Works on scheduled games too. |
+| `/tenman lobby url: https://... [number: N] [whole_series: true]` | Set a game's lobby link and ping its confirmed players. Works on scheduled games too. |
+| `/tenman edit [number: N] [when:] [title:] [slots:] [post_days:] [lobby:]` | Change one game, posted or scheduled. Only the options given change; the roster is kept. |
+| `/tenman update [series: S<id>] [when:] [title:] [slots:] [post_days:] [lobby:] [apply_to_next: true]` | Change a weekly series for the games it creates from now on. |
 | `/tenman cancel [number: N]` | Cancel a game or stop a weekly series (asks to confirm). |
-| `/tenman edit [number: N] [when:] [title:] [slots:] [post_days:] [lobby:]` | Change one game, posted or scheduled; only the options given change. A posted game keeps its roster, its sign-up is redrawn and a short note is posted (players moved onto or off the waitlist by a slot change are pinged, the role never is). Organizer or moderator. |
-| `/tenman update [series: S<id>] [when:] [title:] [slots:] [post_days:] [lobby:] [apply_to_next: true]` | Change a weekly series for the games it creates from now on (`S<id>` as shown in `/tenman list`); `apply_to_next` also changes the upcoming game. Organizer or moderator. |
 
-The `when:` box previews how the bot read the time before you send it ("Sat, Oct 10 at 9:00 PM EDT"). Most phrasings work: `sat 9pm`, `saturday at 9 PM`, `10/10 9pm`, `oct 10 9:30pm`, `fri 9`. Times are in the bot's `TIMEZONE` (Eastern) unless you add one: `sat 9pm ct`, `pt`, `mt`. Discord shows everyone the time in their own zone.
+`edit`, `update` and `cancel` are limited to the game's organizer and moderators (Manage Messages). From the start time, clicks are refused, and the buttons are removed 30 minutes later.
 
-**Buttons on the sign-up:** In, Maybe, Out, +1 Guest, -1 Guest. The first 10 In play; the rest wait in order and move up automatically, with a ping, when someone drops. From the start time clicks are refused; the buttons are removed 30 minutes later.
+## Quick start
 
-**Alerts, in the channel:**
-- **Daily** at `ALERT_TIME` (noon by default) while the game is short. It pings @10 Manner with how many are still needed.
-- **Game day,** 2 hours before start, if still short.
-- **Full,** once, when the roster reaches 10.
-- **Starting now:** pings the confirmed players with the lobby link.
+### 1. Create the Discord application
 
-## Running it
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) and click **New Application**.
+2. On the **Bot** tab, click **Reset Token** and copy the token. Leave every privileged intent **off**.
+3. On **General Information**, leave **Interactions Endpoint URL** empty.
+4. Invite the bot with this link, putting your application ID in place of `<APP_ID>`:
+   ```
+   https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=216064
+   ```
+5. In the channel you'll use, make sure the bot has **View Channel, Send Messages, Embed Links, Read Message History** and **Mention Everyone**. It needs the last one only to ping a role that isn't mentionable.
 
-- **Settings:** copy `.env.sample` to `.env` and fill in the values marked `PASTE_`. Every value is checked at startup.
-- **Locally:** `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, then `.venv/bin/python bot.py`.
-- **On a VPS:** with rootless Podman. See [guides/guide-deploy.txt](guides/guide-deploy.txt).
-- **One copy only:** never run two copies with the same token.
+Turn on Developer Mode (User Settings → Advanced), then right-click your server, channel and role → **Copy ID**. You need all three for the settings.
+
+### 2. Configure
+
+```sh
+cp .env.sample .env
+```
+
+Fill in every value that starts with `PASTE_`. Everything is checked at startup, and a bad value stops the bot with a message that names it.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `DISCORD_TOKEN` | — | Bot token (**required**). In a container, use `secrets/discord_token` instead. |
+| `GUILD_ID` / `CHANNEL_ID` | — | The server and the channel the bot works in (**required**). |
+| `TENMAN_ROLE_ID` | unset | The role to ping in alerts. Leave it unset to post without pinging. |
+| `TIMEZONE` | `America/New_York` | The zone that times like `sat 9pm` are read in. |
+| `ALERT_TIME` | `12:00` | When the daily "need N more" alert goes out. |
+| `GAMEDAY_ALERT_HOURS_BEFORE` | `2` | Hours before start for the game-day alert. |
+| `TENMAN_SLOTS` / `TENMAN_MAX_GUESTS` | `10` / `1` | Roster size and the number of guests per player. |
+| `SCHEDULE_POST_DAYS_BEFORE` | `3` | How early a scheduled sign-up posts. |
+| `LOBBY_ALLOWED_HOSTS` | any | Optional allowlist of lobby-link domains, e.g. `popflash.site`. |
+| `BACKUP_TIME` | `04:00` | When the daily database backup runs. |
+
+The full list is in [`.env.sample`](.env.sample), including spam limits, healthcheck thresholds and paths.
+
+### 3. Run
+
+**Locally:**
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python bot.py
+```
+
+**On a server:** use rootless Podman (the default) or Docker. The bot runs as an unprivileged user, and the token is read from a file rather than the environment. [`guides/guide-deploy.txt`](guides/guide-deploy.txt) walks through it end to end, including optional GitHub Actions deploys on a version tag.
+
+> [!WARNING]
+> Never run two copies with the same token, say one on your PC and one on a server. Both would answer clicks and post alerts.
+
+## How it works
+
+- **One writer.** Every database write goes through a single queue (`utils/db_queue.py`), so two people clicking at the same moment can't corrupt the roster.
+- **Positions are computed, not stored.** Each player's place is derived from the order they joined, so a drop moves the waitlist up correctly every time.
+- **Alerts are claimed before they're sent.** An alert that a crash leaves in flight is marked ambiguous and never resent. You might miss one ping, but you never get it twice.
+- **Input is untrusted.** Titles, lobby links and names are validated on the way in and escaped on the way out (`utils/sanitize.py`). Messages pass explicit `allowed_mentions`, so user text can't ping `@everyone`.
 
 ## Development
 
-| | |
+```sh
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+scripts/ci.sh            # lint, unit tests, simulated end-to-end runs, dependency audit
+scripts/ci.sh --image    # also build the container and run the suite inside it
+```
+
+| Tool | Purpose |
 |---|---|
-| `scripts/ci.sh` | Lint, unit tests, simulated end-to-end runs, dependency audit (`--image` adds the container build) |
-| `devtool.py preview` | Post every message style through the webhook, no pings |
+| `devtool.py preview` | Post every message style through a webhook, with no pings and no bot needed |
 | `python -m utils.backup [--verify F] [--restore F DEST]` | Back up, verify or restore the database |
-| `docs/working-doc.html` | Running project doc: decisions, status, log (local only) |
-| `CHANGELOG.md` | Update under `[Unreleased]` before every change |
+| `tests/sim/` | End-to-end runs that drive the real callbacks against a fake Discord |
 
-All database writes go through one queue (`utils/db_queue.py`), so simultaneous clicks can't race. All user input is validated on the way in and escaped on the way out (`utils/sanitize.py`).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), and report security issues privately as described in [SECURITY.md](SECURITY.md).
 
-Infrastructure is adapted from `steam_tracker_bot`. Retired steam files are in the gitignored `deadcode/`.
+## License
+
+[Apache License 2.0](LICENSE). Counter-Strike 2 is a trademark of Valve Corporation. This project is not affiliated with Valve or Discord.

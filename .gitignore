@@ -21,16 +21,12 @@ sudo_tee_env.txt
 tests/reports/
 .pytest_cache/
 
-# Node (Codex / tooling artifacts)
+# Node tooling artifacts
 node_modules/
 package-lock.json
 
-# Retired files — kept on disk for recovery, out of the repo
+# Local scratch, never in the repo
 deadcode/
-
-# Pentest run artifacts — captures, target logs, tester scratch. The harness
-# itself (mocks, fixtures, compose) is tracked; only its output is not.
-pentest/workspace/
 
 # OS
 .DS_Store
@@ -46,17 +42,19 @@ data/
 .ruff_cache/
 reports/
 
-# Raw Discord channel export used for planning: real usernames, keep out of git
+# Raw Discord exports contain real usernames: keep them out of git
 conov-log.txt
+*-log.txt
 
 # Local rehearsal of a VPS deploy (has a copy of .env)
 deploy-test/
 
-# Project documentation and the working doc: kept locally, not in git
+# Local notes
 docs/
 
 # Container secrets (bot token, webhook URL): never in git
 secrets/
 
-# Claude Code local state and subagent worktrees
+# AI assistant local state and context files
 .claude/
+CLAUDE.md

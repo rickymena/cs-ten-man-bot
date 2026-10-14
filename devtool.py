@@ -166,7 +166,7 @@ def cmd_preview(args, cfg) -> int:
 
         s, r = make("fri 9pm", 6, maybe=2)
         samples.append(("Sign-up post, filling", signup_embed(s, r, avatar).to_dict()))
-        s, r = make("sat 9pm", 12, lobby="https://popflash.site/-/wiggz/scrim")
+        s, r = make("sat 9pm", 12, lobby="https://popflash.site/-/example/scrim")
         samples.append(("Sign-up post, full with waitlist and lobby", signup_embed(s, r, avatar).to_dict()))
 
         s, r = make("fri 9pm", 6, maybe=1)
@@ -178,7 +178,7 @@ def cmd_preview(args, cfg) -> int:
         s, r = make("sat 9pm", 10)
         m = alerts.render_alert(alerts.DueAlert(alerts.FULL, "p", now), s, r, now, cfg)
         samples.append(("Roster full alert", m.embed, m.content))
-        s, r = make("tomorrow 9pm", 10, lobby="https://popflash.site/-/wiggz/scrim")
+        s, r = make("tomorrow 9pm", 10, lobby="https://popflash.site/-/example/scrim")
         m = alerts.render_alert(alerts.DueAlert(alerts.STARTING, "p", now), s, r, now, cfg)
         names = " ".join(f"@{row['display_name'].replace(' ', '')}" for row in r.confirmed)
         samples.append(("Starting now alert (pings the 10 players)", m.embed,

@@ -1,4 +1,4 @@
-# Multi-stage build, ported from the steam tracker.
+# Multi-stage build.
 #
 #   builder  compiles dependency wheels; never shipped
 #   runtime  the production image    -- podman build --target runtime
@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
 
 # Explicit allowlist, never `COPY . .`: a new file at the repo root (an .env,
 # a database) cannot reach the image unless it is named here.
-COPY bot.py healthcheck.py ./
+COPY bot.py healthcheck.py LICENSE NOTICE ./
 COPY utils/__init__.py utils/alerts.py utils/config.py utils/database.py utils/db_queue.py \
      utils/backup.py utils/embeds.py utils/exit_codes.py utils/roster.py utils/sanitize.py utils/scheduler_state.py \
      utils/style.py utils/tracking.py utils/webhook.py utils/when.py ./utils/

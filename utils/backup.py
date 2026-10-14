@@ -1,7 +1,6 @@
 """
 Daily SQLite backup: a consistent online copy, gzipped, with a
-sha256sum-compatible `.sha256` sidecar. Ported from the steam tracker's
-pg_dump backup; the durability contract and retention policy are unchanged:
+sha256sum-compatible `.sha256` sidecar. The durability contract:
 
   * Nothing is ever written under a final name. Every artifact is built as
     `<name>.partial`, verified by reading it back (gzip CRC + SQLite
@@ -67,7 +66,7 @@ def local_now() -> datetime.datetime:
     return datetime.datetime.now(ZoneInfo(os.getenv("TIMEZONE", "America/New_York"))).replace(tzinfo=None)
 
 
-# --------------------------------------------------------------------------- file helpers (from the steam tracker)
+# --------------------------------------------------------------------------- file helpers
 
 def remove_quietly(*paths) -> None:
     for path in paths:
@@ -251,7 +250,7 @@ def restore_backup(path: str, dest: str) -> None:
         remove_quietly(partial)
 
 
-# --------------------------------------------------------------------------- retention (from the steam tracker)
+# --------------------------------------------------------------------------- retention
 
 def _artifact_time(path: str) -> datetime.datetime:
     """The timestamp embedded in the file name (survives copies); mtime as fallback."""

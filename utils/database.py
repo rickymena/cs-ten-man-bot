@@ -1,10 +1,10 @@
 """
 SQLite data layer: schema, migrations and the queries the bot runs.
 
-Adapted from the steam tracker's GameDatabase (utils/database_entry_comparision.py):
-the ordered MIGRATIONS list, the schema_migrations table and SchemaVersionError
-carry over. Postgres advisory locks are gone: every write goes through
-utils/db_queue.py, whose single writer thread already serializes them.
+Migrations are an ordered MIGRATIONS list tracked in the schema_migrations
+table; a database newer than the code raises SchemaVersionError. No locking is
+needed: every write goes through utils/db_queue.py, whose single writer thread
+serializes them.
 
 Every function that writes takes the writer's connection first and is meant
 to be submitted to the queue (`await q.run(db.apply_click, ...)`). They never
@@ -45,7 +45,7 @@ POSTING = "posting"
 POSTED = "posted"
 MAX_POST_ATTEMPTS = 5
 
-# Alert delivery states (same contract as the steam tracker's discord_sent):
+# Alert delivery states:
 #   sending   claimed, POST in flight. Left behind by a crash mid-send, it is
 #             treated as ambiguous: Discord may already have posted it.
 #   sent      confirmed 2xx

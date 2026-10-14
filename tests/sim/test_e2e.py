@@ -103,7 +103,7 @@ def test_a_full_week_from_signup_to_game_start(sim_cfg, discord_fake):
                 for user in crowd[2:6]:
                     await world.click(user, "out", sid)
             if clock == at(4, 20, 30):
-                await world.lobby(ORGANIZER, "https://popflash.site/-/wiggz/scrim")
+                await world.lobby(ORGANIZER, "https://popflash.site/-/example/scrim")
             if clock.hour == 12 and clock.minute == 0 and clock < game:
                 roster = world.roster(sid)
                 if not roster.full and clock.timestamp() >= q.read(db.get_session, sid)["created_at"]:

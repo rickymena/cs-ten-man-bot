@@ -3,13 +3,23 @@
 All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
-Infrastructure was copied from steam_tracker_bot on 2026-10-04; its history lives in that repo.
 
 ---
 
 ## [Unreleased]
 
 Newest sections first.
+
+### Changed (open-source release)
+- Licensed under Apache-2.0 (`LICENSE`, `NOTICE`); public home is github.com/rickymena/cs-ten-man-bot
+- README rewritten for people setting the bot up from scratch: Discord application setup, permissions, settings reference, deploy and development
+- Added `CONTRIBUTING.md`, `SECURITY.md` and GitHub issue templates
+- Removed private references: the local-only `docs/` folder, the internal working doc, `deadcode/`, the original server's role name and lobby link. Code comments no longer refer to the project the infrastructure was adapted from
+- `CLAUDE.md` and the `CHANGES-edit-update.md` branch notes are no longer tracked (the notes are already in this changelog)
+- The runtime image ships `LICENSE` and `NOTICE`, as Apache-2.0 requires for redistribution
+
+### Fixed (tests)
+- Two tests used fixed October 2026 game dates but checked them against the real clock, so they began failing once those dates passed (`test_dropping_below_full_resumes_daily_alerts`, `test_numbered_list_and_autocomplete_labels`). They now pass an explicit `now`
 
 ### Added (edit and update)
 - `/tenman edit [number] [when] [title] [slots] [post_days] [lobby]`: change one game, posted or scheduled, numbered and autocompleted like cancel/lobby. Organizer or moderator only; at least one option; every input through the existing validators

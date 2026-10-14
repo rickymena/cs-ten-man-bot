@@ -1,5 +1,4 @@
-# Process exit codes, kept from the steam tracker (same numbers, so the same
-# monitoring rules apply).
+# Process exit codes. Monitoring can alert on these numbers.
 EXIT_OK = 0
 EXIT_DB_FAILED = 3     # database or backup failure (utils/backup.py)
 EXIT_NOTIFY_FAILED = 4  # Discord delivery failed or webhook misconfigured (devtool.py)

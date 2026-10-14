@@ -1,6 +1,5 @@
 """
 In-process fake Discord webhook server with deterministic fault injection.
-Ported from the steam tracker's tests/sim/fakes.py (the fake Steam half removed).
 
 It binds 127.0.0.1 on an ephemeral port and runs in a daemon thread, so the
 real webhook code talks to it over real sockets: the retry, timeout and

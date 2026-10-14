@@ -123,7 +123,7 @@ def test_cli_backup_and_verify(live_db, tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Retention policy (pure, from the steam tracker)
+# Retention policy (pure)
 # ---------------------------------------------------------------------------
 
 NOW = datetime.datetime(2026, 9, 25, 12, 30, 0)
